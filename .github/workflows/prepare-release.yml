@@ -204,8 +204,12 @@ jobs:
           signingKeyBase64: ${{ secrets.SIGNING_KEY }}
           alias: ${{ secrets.KEY_ALIAS }}
           keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
-          keyPassword: ${{ secrets.KEY_PASSWORD }}
-
+          keyPassword: ${{ secrets.KEY_PASSWORD }}  
+     - name: Upload client app for Oculus Quest
+        uses: actions/upload-artifact@v2
+        with:
+          name: alvr_client_oculus_quest.apk
+          path: ${{steps.sign_quest.outputs.signedReleaseFile}}
       # Assets upload: 2 * .apk
       - name: Upload client for Oculus Quest
         uses: actions/upload-release-asset@v1

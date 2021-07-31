@@ -22,5 +22,6 @@ private:
 	uint64_t m_insertIDRTime = 0;
 	bool m_scheduled = false;
 	std::mutex m_mutex;
-	uint64_t m_minIDRFrameInterval = MIN_IDR_FRAME_INTERVAL;
+	int m_minIDRFrameInterval = MIN_IDR_FRAME_INTERVAL;
 };
+

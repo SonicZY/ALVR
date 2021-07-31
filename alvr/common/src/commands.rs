@@ -10,10 +10,11 @@ use std::{
     process::Command,
 };
 
+const ALVR_DIR_STORAGE_FNAME: &str = "alvr_dir.txt";
 const DRIVER_PATHS_BACKUP_FNAME: &str = "alvr_drivers_paths_backup.txt";
 const INSTALLER_FNAME: &str = "alvr_installer";
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 pub fn exec_fname(name: &str) -> String {
     name.to_owned()
 }
@@ -29,12 +30,10 @@ pub fn installer_path() -> PathBuf {
 ///////////// openvrpaths.vrpath interop ///////////////
 
 pub fn openvr_source_file_path() -> StrResult<PathBuf> {
-    let path = trace_none!(if cfg!(windows) {
-        dirs::cache_dir()
-    } else {
-        dirs::config_dir()
-    })?
-    .join("openvr/openvrpaths.vrpath");
+    #[cfg(windows)]
+    let path = trace_none!(dirs::cache_dir())?.join("openvr/openvrpaths.vrpath");
+    #[cfg(target_os = "linux")]
+    let path = trace_none!(dirs::config_dir())?.join("openvr/openvrpaths.vrpath");
 
     if path.exists() {
         Ok(path)
@@ -123,40 +122,49 @@ pub fn driver_registration(driver_paths: &[PathBuf], register: bool) -> StrResul
     save_openvr_paths_json(&openvr_paths_json)
 }
 
-pub fn get_alvr_dir_from_registered_drivers() -> StrResult<PathBuf> {
-    use serde::Deserialize;
-    #[derive(Deserialize)]
-    struct VrDriverManifest {
-        name: String,
+fn get_alvr_dir_store_path() -> StrResult<PathBuf> {
+    if cfg!(windows) {
+        Ok(env::temp_dir().join(ALVR_DIR_STORAGE_FNAME))
+    } else {
+        Ok(trace_none!(dirs::runtime_dir())?.join(ALVR_DIR_STORAGE_FNAME))
     }
-    for dir in get_registered_drivers()? {
-        let manifest = dir.join("driver.vrdrivermanifest");
-        if manifest.exists() {
-            let file = std::fs::File::open(manifest);
-            if file.is_err() {
-                continue;
-            };
+}
 
-            let reader = std::io::BufReader::new(file.unwrap());
-            let parsed_manifest: Result<VrDriverManifest, serde_json::Error> =
-                serde_json::from_reader(reader);
-            if parsed_manifest.is_err() {
-                continue;
-            };
-            if parsed_manifest.unwrap().name == "alvr_server" {
-                return alvr_filesystem_layout::alvr_dir_from_component(
-                    &dir,
-                    &alvr_filesystem_layout::LAYOUT.openvr_driver_dir,
-                );
-            }
+fn get_alvr_dir_from_storage() -> StrResult<PathBuf> {
+    let alvr_dir_store_path = get_alvr_dir_store_path()?;
+    if let Ok(path) = fs::read_to_string(alvr_dir_store_path) {
+        Ok(PathBuf::from(path))
+    } else {
+        fmt_e!("ALVR driver path not stored")
+    }
+}
+
+pub fn get_alvr_dir_from_registered_drivers() -> StrResult<PathBuf> {
+    for dir in get_registered_drivers()? {
+        if dir.join(exec_fname("ALVR launcher")).exists() && dir.join("dashboard").exists() {
+            return Ok(dir);
         }
     }
     fmt_e!("ALVR driver path not registered")
 }
 
 pub fn get_alvr_dir() -> StrResult<PathBuf> {
-    get_alvr_dir_from_registered_drivers()
+    get_alvr_dir_from_storage()
+        .or_else(|_| get_alvr_dir_from_registered_drivers())
         .map_err(|e| format!("ALVR driver path not stored and not registered ({})", e))
+}
+
+pub fn store_alvr_dir(alvr_dir: &Path) -> StrResult {
+    let alvr_dir_store_path = get_alvr_dir_store_path()?;
+
+    trace_err!(fs::write(
+        alvr_dir_store_path,
+        alvr_dir.to_string_lossy().as_bytes()
+    ))
+}
+
+pub fn maybe_delete_alvr_dir_storage() {
+    fs::remove_file(get_alvr_dir_store_path().unwrap()).ok();
 }
 
 fn driver_paths_backup_present() -> bool {
@@ -191,22 +199,13 @@ pub fn maybe_save_driver_paths_backup(paths_backup: &[PathBuf]) -> StrResult {
 }
 
 pub fn get_session_path(base: &Path) -> StrResult<PathBuf> {
-    if cfg!(target_os = "linux") {
+    if cfg!(windows) {
+        Ok(base.join("session.json"))
+    } else {
         Ok(trace_none!(dirs::config_dir())?
             .join("alvr")
             .join("session.json"))
-    } else {
-        Ok(base.join("session.json"))
     }
-}
-
-#[cfg(target_os = "linux")]
-pub fn maybe_create_alvr_config_directory() -> StrResult {
-    let alvr_dir = trace_none!(dirs::config_dir())?.join("alvr");
-    if !alvr_dir.exists() {
-        trace_err!(fs::create_dir(alvr_dir))?;
-    }
-    Ok(())
 }
 
 /////////////////// firewall //////////////////////
@@ -278,11 +277,9 @@ pub fn firewall_rules(add: bool) -> Result<(), i32> {
 /////////////////// launcher invocation ///////////////////////
 
 fn invoke_launcher(alvr_dir: &Path, flag: &str) -> StrResult {
-    trace_err!(
-        Command::new(alvr_dir.join(&alvr_filesystem_layout::LAYOUT.launcher_exe))
-            .arg(flag)
-            .status()
-    )?;
+    trace_err!(Command::new(alvr_dir.join(exec_fname("ALVR launcher")))
+        .arg(flag)
+        .status())?;
 
     Ok(())
 }

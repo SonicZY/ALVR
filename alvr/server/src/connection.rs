@@ -1,3 +1,6 @@
+#[cfg(not(feature = "new_dashboard"))]
+use settings_schema_legacy as settings_schema;
+
 use crate::{
     connection_utils, openvr, ClientListAction, CLIENTS_UPDATED_NOTIFIER, MAYBE_LEGACY_SENDER,
     RESTART_NOTIFIER, SESSION_MANAGER,
@@ -7,7 +10,8 @@ use alvr_common::{
     audio::{self, AudioDeviceType},
     data::{
         AudioDeviceId, ClientConfigPacket, ClientControlPacket, CodecType, FrameSize,
-        HeadsetInfoPacket, OpenvrConfig, PlayspaceSyncPacket, ServerControlPacket, ALVR_VERSION,
+        HeadsetInfoPacket, OpenvrConfig, PlayspaceSyncPacket, ServerControlPacket, Version,
+        ALVR_VERSION,
     },
     logging,
     prelude::*,
@@ -19,7 +23,6 @@ use alvr_common::{
 };
 use futures::future::{BoxFuture, Either};
 use nalgebra::Translation3;
-use semver::Version;
 use settings_schema::Switch;
 use std::{
     future,
@@ -196,8 +199,7 @@ async fn client_handshake(
         eye_resolution_height: video_eye_height,
         fps,
         game_audio_sample_rate,
-        reserved: "".into(),
-        server_version: version.clone(),
+        reserved: format!("{}", *ALVR_VERSION),
     };
     proto_socket.send(&client_config).await?;
 
@@ -231,43 +233,12 @@ async fn client_handshake(
         target_eye_resolution_height: target_eye_height,
         seconds_from_vsync_to_photons: settings.video.seconds_from_vsync_to_photons,
         force_3dof: settings.headset.force_3dof,
-        tracking_ref_only: settings.headset.tracking_ref_only,
-        enable_vive_tracker_proxy: settings.headset.enable_vive_tracker_proxy,
         aggressive_keyframe_resend: settings.connection.aggressive_keyframe_resend,
         adapter_index: settings.video.adapter_index,
         codec: matches!(settings.video.codec, CodecType::HEVC) as _,
         refresh_rate: fps as _,
         use_10bit_encoder: settings.video.use_10bit_encoder,
         encode_bitrate_mbs: settings.video.encode_bitrate_mbs,
-        enable_adaptive_bitrate: session_settings.video.adaptive_bitrate.enabled,
-        bitrate_maximum: session_settings
-            .video
-            .adaptive_bitrate
-            .content
-            .bitrate_maximum,
-        latency_target: session_settings
-            .video
-            .adaptive_bitrate
-            .content
-            .latency_target,
-        latency_use_frametime: session_settings
-            .video
-            .adaptive_bitrate
-            .content
-            .latency_use_frametime
-            .enabled,
-        latency_target_maximum: session_settings
-            .video
-            .adaptive_bitrate
-            .content
-            .latency_use_frametime
-            .content
-            .latency_target_maximum,
-        latency_threshold: session_settings
-            .video
-            .adaptive_bitrate
-            .content
-            .latency_threshold,
         controllers_tracking_system_name: session_settings
             .headset
             .controllers
@@ -304,17 +275,11 @@ async fn client_handshake(
             .content
             .serial_number
             .clone(),
-        controllers_type_left: session_settings
+        controllers_type: session_settings
             .headset
             .controllers
             .content
-            .ctrl_type_left
-            .clone(),
-        controllers_type_right: session_settings
-            .headset
-            .controllers
-            .content
-            .ctrl_type_right
+            .ctrl_type
             .clone(),
         controllers_registered_device_type: session_settings
             .headset
@@ -348,11 +313,6 @@ async fn client_handshake(
             .controllers
             .content
             .haptics_intensity,
-        use_headset_tracking_system: session_settings
-            .headset
-            .controllers
-            .content
-            .use_headset_tracking_system,
         enable_foveated_rendering: session_settings.video.foveated_rendering.enabled,
         foveation_strength: session_settings.video.foveated_rendering.content.strength,
         foveation_shape: session_settings.video.foveated_rendering.content.shape,
@@ -488,13 +448,18 @@ async fn connection_pipeline() -> StrResult {
         .send(&ServerControlPacket::StartStream)
         .await?;
 
-    match control_receiver.recv().await {
-        Ok(ClientControlPacket::StreamReady) => {}
-        Ok(_) => {
-            return fmt_e!("Got unexpected packet waiting for stream ack");
-        }
-        Err(e) => {
-            return fmt_e!("Error while waiting for stream ack: {}", e);
+    if version
+        .map(|v| v >= Version::from((15, 1, 0)))
+        .unwrap_or(false)
+    {
+        match control_receiver.recv().await {
+            Ok(ClientControlPacket::Reserved(data)) if data == "StreamReady" => {}
+            Ok(_) => {
+                return fmt_e!("Got unexpected packet waiting for stream ack");
+            }
+            Err(e) => {
+                return fmt_e!("Error while waiting for stream ack: {}", e);
+            }
         }
     }
 
@@ -615,34 +580,30 @@ async fn connection_pipeline() -> StrResult {
     };
 
     let (playspace_sync_sender, playspace_sync_receiver) = smpsc::channel::<PlayspaceSyncPacket>();
+    // use a separate thread because SetChaperone() is blocking
+    thread::spawn(move || {
+        while let Ok(packet) = playspace_sync_receiver.recv() {
+            let transform = Translation3::from(packet.position.coords) * packet.rotation;
+            // transposition is done to switch from column major to row major
+            let matrix_transp = transform.to_matrix().transpose();
 
-    let is_tracking_ref_only = settings.headset.tracking_ref_only;
-    if !is_tracking_ref_only {
-        // use a separate thread because SetChaperone() is blocking
-        thread::spawn(move || {
-            while let Ok(packet) = playspace_sync_receiver.recv() {
-                let transform = Translation3::from(packet.position.coords) * packet.rotation;
-                // transposition is done to switch from column major to row major
-                let matrix_transp = transform.to_matrix().transpose();
+            let perimeter_points = if let Some(perimeter_points) = packet.perimeter_points {
+                perimeter_points.iter().map(|p| [p[0], p[1]]).collect()
+            } else {
+                vec![]
+            };
 
-                let perimeter_points = if let Some(perimeter_points) = packet.perimeter_points {
-                    perimeter_points.iter().map(|p| [p[0], p[1]]).collect()
-                } else {
-                    vec![]
-                };
-
-                unsafe {
-                    crate::SetChaperone(
-                        matrix_transp.as_ptr(),
-                        packet.area_width,
-                        packet.area_height,
-                        perimeter_points.as_ptr() as _,
-                        perimeter_points.len() as _,
-                    )
-                };
-            }
-        });
-    }
+            unsafe {
+                crate::SetChaperone(
+                    matrix_transp.as_ptr(),
+                    packet.area_width,
+                    packet.area_height,
+                    perimeter_points.as_ptr() as _,
+                    perimeter_points.len() as _,
+                )
+            };
+        }
+    });
 
     let keepalive_loop = {
         let control_sender = Arc::clone(&control_sender);
@@ -667,9 +628,7 @@ async fn connection_pipeline() -> StrResult {
         loop {
             match control_receiver.recv().await {
                 Ok(ClientControlPacket::PlayspaceSync(packet)) => {
-                    if !is_tracking_ref_only {
-                        playspace_sync_sender.send(packet).ok();
-                    }
+                    playspace_sync_sender.send(packet).ok();
                 }
                 Ok(ClientControlPacket::RequestIdr) => unsafe { crate::RequestIDR() },
                 Ok(_) => (),

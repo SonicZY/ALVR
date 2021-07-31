@@ -231,6 +231,11 @@ fn init() {
 
     let alvr_dir_c_string = CString::new(ALVR_DIR.to_string_lossy().to_string()).unwrap();
     unsafe { g_alvrDir = alvr_dir_c_string.into_raw() };
+
+    // ALVR_DIR has been used (and so initialized). I don't need alvr_dir storage on disk anymore for windows, however it is required for the Vulkan layer on Linux
+    if cfg!(not(target_os = "linux")) {
+        commands::maybe_delete_alvr_dir_storage();
+    }
 }
 
 #[no_mangle]
@@ -285,16 +290,15 @@ pub unsafe extern "C" fn HmdDriverFactory(
         }
     }
 
-    pub extern "C" fn driver_ready_idle(set_default_chap: bool) {
+    pub extern "C" fn driver_ready_idle() {
         logging::show_err(commands::apply_driver_paths_backup(ALVR_DIR.clone()));
 
         if let Some(runtime) = &mut *MAYBE_RUNTIME.lock() {
             runtime.spawn(async move {
-                if set_default_chap {
-                    // call this when inside a new tokio thread. Calling this on the parent thread will
-                    // crash SteamVR
-                    unsafe { SetDefaultChaperone() };
-                }
+                // call this when inside a new tokio thread. Calling this on the parent thread will
+                // crash SteamVR
+                unsafe { SetDefaultChaperone() };
+
                 tokio::select! {
                     _ = connection::connection_lifecycle_loop() => (),
                     _ = SHUTDOWN_NOTIFIER.notified() => (),

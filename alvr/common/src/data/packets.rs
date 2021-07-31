@@ -49,7 +49,6 @@ pub struct ClientConfigPacket {
     pub fps: f32,
     pub game_audio_sample_rate: u32,
     pub reserved: String,
-    pub server_version: Option<Version>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -75,7 +74,6 @@ pub enum ClientControlPacket {
     PlayspaceSync(PlayspaceSyncPacket),
     RequestIdr,
     KeepAlive,
-    StreamReady,
     Reserved(String),
     ReservedBuffer(Vec<u8>),
 }

@@ -1,33 +1,15 @@
 #pragma once
 
 #include <vulkan/vulkan.hpp>
-#include <functional>
 #include <memory>
 
-#include "generated/avutil_loader.h"
-#include "generated/avcodec_loader.h"
-#include "generated/avfilter_loader.h"
-#include "generated/swscale_loader.h"
+extern "C" struct AVBufferRef;
+extern "C" struct AVDictionary;
+extern "C" struct AVVkFrame;
+extern "C" struct AVFrame;
 
 namespace alvr
 {
-
-class libav
-{
-public:
-	static libav& instance();
-	avutil m_avutil;
-	avcodec m_avcodec;
-	swscale m_swscale;
-	avfilter m_avfilter;
-private:
-	libav();
-};
-
-#define AVUTIL ::alvr::libav::instance().m_avutil
-#define AVCODEC ::alvr::libav::instance().m_avcodec
-#define SWSCALE ::alvr::libav::instance().m_swscale
-#define AVFILTER ::alvr::libav::instance().m_avfilter
 
 // Utility class to build an exception from an ffmpeg return code.
 // Messages are rarely useful however.

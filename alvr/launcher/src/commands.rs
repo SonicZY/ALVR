@@ -1,4 +1,8 @@
-use alvr_common::{commands, logging, prelude::*};
+use alvr_common::{
+    commands,
+    logging::{self, CRASH_LOG_FNAME},
+    prelude::*,
+};
 use serde_json as json;
 use std::{
     env, fs,
@@ -30,7 +34,7 @@ pub fn is_steamvr_running() -> bool {
     system.refresh_processes();
 
     !system
-        .process_by_name(&commands::exec_fname("vrserver"))
+        .get_process_by_name(&commands::exec_fname("vrserver"))
         .is_empty()
 }
 
@@ -39,7 +43,7 @@ pub fn maybe_launch_steamvr() {
     system.refresh_processes();
 
     if system
-        .process_by_name(&commands::exec_fname("vrserver"))
+        .get_process_by_name(&commands::exec_fname("vrserver"))
         .is_empty()
     {
         #[cfg(windows)]
@@ -66,7 +70,7 @@ pub fn kill_steamvr() {
 
     // first kill vrmonitor, then kill vrserver if it is hung.
 
-    for process in system.process_by_name(&commands::exec_fname("vrmonitor")) {
+    for process in system.get_process_by_name(&commands::exec_fname("vrmonitor")) {
         #[cfg(not(windows))]
         process.kill(sysinfo::Signal::Term);
         #[cfg(windows)]
@@ -75,7 +79,7 @@ pub fn kill_steamvr() {
 
     thread::sleep(Duration::from_secs(1));
 
-    for process in system.process_by_name(&commands::exec_fname("vrserver")) {
+    for process in system.get_process_by_name(&commands::exec_fname("vrserver")) {
         #[cfg(not(windows))]
         process.kill(sysinfo::Signal::Term);
         #[cfg(windows)]
@@ -105,20 +109,22 @@ pub fn unblock_alvr_addon() -> StrResult {
 }
 
 pub fn current_alvr_dir() -> StrResult<PathBuf> {
-    alvr_filesystem_layout::alvr_dir_from_component(
-        &trace_err!(env::current_exe())?,
-        &alvr_filesystem_layout::LAYOUT.launcher_exe,
-    )
+    let current_path = trace_err!(env::current_exe())?;
+    Ok(trace_none!(current_path.parent())?.to_owned())
 }
 
 pub fn maybe_register_alvr_driver() -> StrResult {
     let current_alvr_dir = current_alvr_dir()?;
-    let alvr_driver_dir = current_alvr_dir.join(&alvr_filesystem_layout::LAYOUT.openvr_driver_dir);
+
+    commands::store_alvr_dir(&current_alvr_dir)?;
 
     let driver_registered = commands::get_alvr_dir_from_registered_drivers()
         .ok()
-        .filter(|dir| *dir == alvr_driver_dir)
+        .filter(|dir| *dir == current_alvr_dir.clone())
         .is_some();
+
+    #[cfg(target_os = "linux")]
+    maybe_wrap_vrcompositor_launcher()?;
 
     if !driver_registered {
         let paths_backup = match commands::get_registered_drivers() {
@@ -137,36 +143,30 @@ pub fn maybe_register_alvr_driver() -> StrResult {
 
         commands::driver_registration(&paths_backup, false)?;
 
-        commands::driver_registration(&[alvr_driver_dir], true)?;
+        commands::driver_registration(&[current_alvr_dir], true)?;
     }
-
-    #[cfg(target_os = "linux")]
-    maybe_wrap_vrcompositor_launcher()?;
 
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
 pub fn maybe_wrap_vrcompositor_launcher() -> StrResult {
+    use std::{fs::File, io::prelude::*, os::unix::fs::PermissionsExt};
+
     let steamvr_bin_dir = commands::steamvr_root_dir()?.join("bin").join("linux64");
-    let real_launcher_path = steamvr_bin_dir.join("vrcompositor.real");
-    let launcher_path = steamvr_bin_dir.join("vrcompositor");
+    let real_launcher_path = steamvr_bin_dir.join("vrcompositor-launcher.real");
+    let launcher_path = steamvr_bin_dir.join("vrcompositor-launcher");
 
-    // In case of SteamVR update, vrcompositor will be restored
-    match fs::read_link(&launcher_path) {
-        Err(_) => match fs::metadata(&launcher_path) {
-            Err(_) => (), //file does not exist, do nothing
-            Ok(_) => {
-                trace_err!(fs::rename(&launcher_path, &real_launcher_path))?;
-            }
-        },
-        Ok(_) => trace_err!(fs::remove_file(&launcher_path))?, // recreate the link
-    };
+    if !real_launcher_path.exists() {
+        trace_err!(fs::rename(&launcher_path, &real_launcher_path))?;
 
-    trace_err!(std::os::unix::fs::symlink(
-        commands::get_alvr_dir()?.join(&alvr_filesystem_layout::LAYOUT.vrcompositor_wrapper),
-        &launcher_path
-    ))?;
+        let mut file = trace_err!(File::create(launcher_path))?;
+        trace_err!(file.write_all(include_bytes!("../res/vrcompositor_launcher_wrapper.sh")))?;
+
+        let mut perms = trace_err!(file.metadata())?.permissions();
+        perms.set_mode(0o755); // rwxr-xr-x
+        trace_err!(file.set_permissions(perms))?;
+    }
 
     Ok(())
 }
@@ -211,7 +211,5 @@ pub fn invoke_installer() {
     spawn_no_window(Command::new(commands::installer_path()).arg("-q"));
 
     // delete crash_log.txt (take advantage of the occasion to do some routine cleaning)
-    if let Ok(alvr_dir) = current_alvr_dir() {
-        fs::remove_file(alvr_filesystem_layout::crash_log(&alvr_dir)).ok();
-    }
+    fs::remove_file(current_alvr_dir().unwrap().join(CRASH_LOG_FNAME)).ok();
 }

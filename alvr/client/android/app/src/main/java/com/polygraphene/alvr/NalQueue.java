@@ -49,8 +49,4 @@ public class NalQueue {
     public int size() {
         return mNalQueue.size();
     }
-
-    public void recycle(NAL nal) {
-      mUnusedList.add(nal);
-    }
 }

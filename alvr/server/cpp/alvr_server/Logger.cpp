@@ -60,7 +60,5 @@ void Debug(const char *format, ...)
 	va_start(args, format);
 	_log(format, args, LogDebug);
 	va_end(args);
-#else
-	(void)format;
 #endif
 }

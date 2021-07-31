@@ -54,7 +54,6 @@ void DebugDriverLog(const char* pMsgFormat, ...)
 	DriverLogVarArgs(pMsgFormat, args);
 
 	va_end(args);
-#else
-	(void)pMsgFormat;
 #endif
 }
+

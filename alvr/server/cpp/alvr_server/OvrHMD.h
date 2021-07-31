@@ -14,7 +14,6 @@ class VSyncThread;
 
 class OvrController;
 class OvrController;
-class OvrViveTrackerProxy;
 
 class OvrDisplayComponent;
 class CEncoder;
@@ -69,14 +68,10 @@ public:
 
 	void updateIPDandFoV(const TrackingInfo& info);
 
-	bool IsTrackingRef() const { return m_deviceClass == vr::TrackedDeviceClass_TrackingReference; }
-	bool IsHMD() const { return m_deviceClass == vr::TrackedDeviceClass_HMD; }
-
 	std::shared_ptr<ClientConnection> m_Listener;
 private:
 	bool m_baseComponentsInitialized;
 	bool m_streamComponentsInitialized;
-	vr::ETrackedDeviceClass m_deviceClass;
 	vr::TrackedDeviceIndex_t m_unObjectId;
 	vr::PropertyContainerHandle_t m_ulPropertyContainer;
 	
@@ -101,6 +96,4 @@ private:
 	std::shared_ptr<OvrDirectModeComponent> m_directModeComponent;
 #endif
 	std::shared_ptr<PoseHistory> m_poseHistory;
-
-	std::shared_ptr<OvrViveTrackerProxy> m_viveTrackerProxy;
 };

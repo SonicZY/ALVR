@@ -273,9 +273,8 @@ pub unsafe extern "system" fn Java_com_polygraphene_alvr_OvrActivity_onBatteryCh
     _: JNIEnv,
     _: JObject,
     battery: i32,
-    plugged: i32,
 ) {
-    onBatteryChangedNative(battery, plugged)
+    onBatteryChangedNative(battery)
 }
 
 #[no_mangle]

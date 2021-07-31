@@ -1,3 +1,6 @@
+#[cfg(not(feature = "new_dashboard"))]
+use settings_schema_legacy as settings_schema;
+
 use crate::{
     connection_utils::{self, ConnectionError},
     MAYBE_LEGACY_SENDER,
@@ -6,7 +9,7 @@ use alvr_common::{
     data::{
         ClientConfigPacket, ClientControlPacket, ClientHandshakePacket, CodecType,
         HeadsetInfoPacket, PlayspaceSyncPacket, PrivateIdentity, ServerControlPacket,
-        ServerHandshakePacket, SessionDesc, TrackingSpace, ALVR_NAME, ALVR_VERSION,
+        ServerHandshakePacket, SessionDesc, TrackingSpace, Version, ALVR_NAME, ALVR_VERSION,
     },
     prelude::*,
     sockets::{PeerType, ProtoControlSocket, StreamSocketBuilder, LEGACY},
@@ -18,7 +21,6 @@ use jni::{
     JavaVM,
 };
 use nalgebra::{Point2, Point3, Quaternion, UnitQuaternion};
-use semver::Version;
 use serde_json as json;
 use settings_schema::Switch;
 use std::{
@@ -213,20 +215,26 @@ async fn connection_pipeline(
     )
     .await?;
 
-    if let Err(e) = control_sender
-        .lock()
-        .await
-        .send(&ClientControlPacket::StreamReady)
-        .await
+    let version = Version::from_str(&config_packet.reserved).ok();
+    if version
+        .map(|v| v >= Version::from((15, 1, 0)))
+        .unwrap_or(false)
     {
-        info!("Server disconnected. Cause: {}", e);
-        set_loading_message(
-            &*java_vm,
-            &*activity_ref,
-            hostname,
-            SERVER_DISCONNECTED_MESSAGE,
-        )?;
-        return Ok(());
+        if let Err(e) = control_sender
+            .lock()
+            .await
+            .send(&ClientControlPacket::Reserved("StreamReady".into()))
+            .await
+        {
+            info!("Server disconnected. Cause: {}", e);
+            set_loading_message(
+                &*java_vm,
+                &*activity_ref,
+                hostname,
+                SERVER_DISCONNECTED_MESSAGE,
+            )?;
+            return Ok(());
+        }
     }
 
     let mut stream_socket = tokio::select! {
@@ -376,6 +384,7 @@ async fn connection_pipeline(
 
                 let mut idr_request_deadline = None;
 
+                let mut statistics_deadline = Instant::now();
                 while let Ok(mut data) = legacy_receive_data_receiver.recv() {
                     // Send again IDR packet every 2s in case it is missed
                     // (due to dropped burst of packets at the start of the stream or otherwise).
@@ -391,6 +400,13 @@ async fn connection_pipeline(
                     }
 
                     crate::legacyReceive(data.as_mut_ptr(), data.len() as _);
+
+                    let now = Instant::now();
+                    if now > statistics_deadline {
+                        // sendTimeSync() must be called on the same thread of initializeSocket()
+                        crate::sendTimeSync();
+                        statistics_deadline += Duration::from_secs(1);
+                    }
                 }
 
                 crate::closeSocket(env_ptr);
@@ -400,7 +416,7 @@ async fn connection_pipeline(
         }
     });
 
-    let tracking_interval = Duration::from_secs_f32(1_f32 / 360_f32);
+    let tracking_interval = Duration::from_secs_f32(1_f32 / (config_packet.fps * 3_f32));
     let tracking_loop = async move {
         let mut deadline = Instant::now();
         loop {

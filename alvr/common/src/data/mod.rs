@@ -1,14 +1,27 @@
 mod packets;
-mod session;
-mod settings;
 mod version;
+
+#[cfg(not(feature = "new_dashboard"))]
+mod legacy_session;
+#[cfg(not(feature = "new_dashboard"))]
+mod legacy_settings;
+#[cfg(feature = "new_dashboard")]
+mod session;
+#[cfg(feature = "new_dashboard")]
+mod settings;
 
 use serde::{Deserialize, Serialize};
 
 pub use packets::*;
 pub use version::*;
 
+#[cfg(not(feature = "new_dashboard"))]
+pub use legacy_session::*;
+#[cfg(not(feature = "new_dashboard"))]
+pub use legacy_settings::*;
+#[cfg(feature = "new_dashboard")]
 pub use session::*;
+#[cfg(feature = "new_dashboard")]
 pub use settings::*;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -23,8 +36,10 @@ pub struct PrivateIdentity {
     pub key_pem: String,
 }
 
+#[cfg(any(windows, target_os = "linux", target_os = "android"))]
 use crate::prelude::*;
 
+#[cfg(any(windows, target_os = "linux", target_os = "android"))]
 pub fn create_identity(hostname: Option<String>) -> StrResult<PrivateIdentity> {
     let hostname = hostname.unwrap_or(format!("{}.client.alvr", rand::random::<u16>()));
 

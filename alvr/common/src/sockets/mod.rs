@@ -7,7 +7,7 @@ pub use stream_socket::*;
 use std::net::{IpAddr, Ipv4Addr};
 
 pub const LOCAL_IP: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
-pub const CONTROL_PORT: u16 = 9843;
+pub const CONTROL_PORT: u16 = 34843;
 pub const MAX_HANDSHAKE_PACKET_SIZE_BYTES: usize = 4_000;
 
 type Ldc = tokio_util::codec::LengthDelimitedCodec;
